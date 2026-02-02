@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Finanzas de la Farmacia</title>
+
+<link rel="stylesheet" href="styles.css">
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+
+<body>
+
+<!-- LOGIN -->
+<div id="login" class="card">
+  <h2>Acceso</h2>
+  <input type="password" id="pin" placeholder="PIN">
+  <button onclick="verificarPIN()">Entrar</button>
+</div>
+
+<!-- APP -->
+<div id="app" style="display:none">
+
+<header>
+  <h1>Finanzas de la Farmacia</h1>
+  <p>Panel financiero</p>
+  <button onclick="toggleModo()">Modo oscuro</button>
+</header>
+
+<section class="card">
+  <h2>Periodo</h2>
+  <select id="tipoPeriodo">
+    <option>Semanal</option>
+    <option>Mensual</option>
+    <option>Bimestral</option>
+  </select>
+
+  <label>Periodo</label>
+  <input id="periodo">
+
+  <label>Ingresos</label>
+  <input type="number" id="ingresos">
+
+  <label>Costo de venta</label>
+  <input type="number" id="costoVenta">
+
+  <label>Gastos fijos</label>
+  <input type="number" id="gastosFijos">
+
+  <label>Gastos variables</label>
+  <input type="number" id="gastosVariables">
+</section>
+
+<section class="card">
+  <h2>Distribución (%)</h2>
+
+  <label>Reinversión</label>
+  <input type="number" id="pReinversion" value="60">
+
+  <label>Fondo libre</label>
+  <input type="number" id="pLibre" value="30">
+
+  <label>Ahorro</label>
+  <input type="number" id="pAhorro" value="10">
+</section>
+
+<section class="card">
+  <h2>Meta financiera (ahorro)</h2>
+  <input type="number" id="metaAhorro">
+  <div id="estadoMeta"></div>
+</section>
+
+<button onclick="guardar()">Guardar y analizar</button>
+<button onclick="borrarDatos()" style="background:#dc2626">Borrar datos</button>
+
+<section class="card">
+  <h2>Resumen</h2>
+  <div id="resumen"></div>
+</section>
+
+<section class="card">
+  <h2>Distribución del dinero</h2>
+  <canvas id="graficaDistribucion"></canvas>
+</section>
+
+<section class="card">
+  <h2>Comparación histórica</h2>
+  <canvas id="graficaComparativa"></canvas>
+</section>
+
+<section class="card">
+  <h2>Exportar</h2>
+  <button onclick="exportarExcel()">Excel</button>
+  <button onclick="exportarPDF()">PDF</button>
+</section>
+
+</div>
+
+<script>
+let chartDist, chartComp;
+
+/* ===== PIN ===== */
+function verificarPIN(){
+  if(!localStorage.getItem("pin")){
+    localStorage.setItem("pin", pin.value);
+    alert("PIN creado");
+  }
+  if(pin.value === localStorage.getItem("pin")){
+    login.style.display="none";
+    app.style.display="block";
+    cargarTodo();
+  } else alert("PIN incorrecto");
+}
+
+/* ===== MODO ===== */
+function toggleModo(){
+  document.body.classList.toggle("dark");
+  localStorage.setItem("modo",document.body.classList.contains("dark")?"dark":"light");
+}
+if(localStorage.getItem("modo")==="dark") document.body.classList.add("dark");
+
+/* ===== GUARDAR ===== */
+function guardar(){
+  const ing = +ingresos.value;
+  const costo = +costoVenta.value;
+  const gf = +gastosFijos.value;
+  const gv = +gastosVariables.value;
+
+  if(!periodo.value || ing<=0){
+    alert("Datos incompletos");
+    return;
+  }
+
+  const gastosTotales = costo + gf + gv;
+  const utilidad = ing - gastosTotales;
+
+  const data = {
+    periodo: periodo.value,
+    ingresos: ing,
+    costoVenta: costo,
+    gastosFijos: gf,
+    gastosVariables: gv,
+    gastosTotales,
+    utilidad,
+    reinversion: utilidad * pReinversion.value/100,
+    libre: utilidad * pLibre.value/100,
+    ahorro: utilidad * pAhorro.value/100,
+    fecha: Date.now()
+  };
+
+  localStorage.setItem("fin_"+data.fecha, JSON.stringify(data));
+  if(metaAhorro.value) localStorage.setItem("metaAhorro",metaAhorro.value);
+  cargarTodo();
+}
+
+/* ===== BORRAR ===== */
+function borrarDatos(){
+  if(confirm("¿Borrar todos los registros financieros?")){
+    Object.keys(localStorage).forEach(k=>{
+      if(k.startsWith("fin_")) localStorage.removeItem(k);
+    });
+    cargarTodo();
+  }
+}
+
+/* ===== REGISTROS ===== */
+function registros(){
+  return Object.keys(localStorage)
+    .filter(k=>k.startsWith("fin_"))
+    .map(k=>JSON.parse(localStorage[k]))
+    .sort((a,b)=>a.fecha-b.fecha);
+}
+
+/* ===== RESUMEN ===== */
+function cargarTodo(){
+  const r = registros();
+  if(!r.length) return;
+  const d = r.at(-1);
+
+  resumen.innerHTML = `
+    Ingresos: $${d.ingresos}<br>
+    Gastos totales: $${d.gastosTotales}<br>
+    Utilidad: $${d.utilidad}<br><br>
+    Reinversión: $${d.reinversion}<br>
+    Fondo libre: $${d.libre}<br>
+    Ahorro: $${d.ahorro}
+  `;
+
+  metaUI(r);
+  graficas(r);
+}
+
+/* ===== METAS ===== */
+function metaUI(r){
+  const meta = +localStorage.getItem("metaAhorro");
+  if(!meta) return;
+  const ahorro = r.reduce((s,x)=>s+x.ahorro,0);
+  estadoMeta.innerHTML = `Ahorro: $${ahorro} / $${meta}`;
+}
+
+/* ===== GRAFICAS ===== */
+function graficas(r){
+  if(chartDist) chartDist.destroy();
+  if(chartComp) chartComp.destroy();
+
+  const d = r.at(-1);
+
+  chartDist = new Chart(graficaDistribucion,{
+    type:"doughnut",
+    data:{
+      labels:["Reinversión","Libre","Ahorro"],
+      datasets:[{data:[d.reinversion,d.libre,d.ahorro],
+        backgroundColor:["#2563eb","#6b7280","#16a34a"]}]
+    }
+  });
+
+  chartComp = new Chart(graficaComparativa,{
+    type:"bar",
+    data:{
+      labels:r.map(x=>x.periodo),
+      datasets:[
+        {label:"Ingresos",data:r.map(x=>x.ingresos),backgroundColor:"#2563eb"},
+        {label:"Gastos",data:r.map(x=>x.gastosTotales),backgroundColor:"#dc2626"},
+        {label:"Utilidad",data:r.map(x=>x.utilidad),backgroundColor:"#16a34a"}
+      ]
+    }
+  });
+}
+
+/* ===== EXPORT ===== */
+function exportarExcel(){
+  const ws=XLSX.utils.json_to_sheet(registros());
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"Finanzas");
+  XLSX.writeFile(wb,"finanzas_farmacia.xlsx");
+}
+
+function exportarPDF(){
+  const pdf=new jspdf.jsPDF();
+  pdf.text("Finanzas de la Farmacia",20,20);
+  let y=30;
+  registros().forEach(r=>{
+    pdf.text(`${r.periodo} Utilidad $${r.utilidad}`,20,y);
+    y+=8;
+  });
+  pdf.save("finanzas_farmacia.pdf");
+}
+</script>
+
+</body>
+</html>
